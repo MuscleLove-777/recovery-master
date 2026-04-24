@@ -2,7 +2,6 @@ name: リカバリーマスター 自動記事生成
 
 on:
   schedule:
-    # 毎日 JST 12:00 (UTC 3:00)
     - cron: '0 3 * * *'
   workflow_dispatch:
 
@@ -11,8 +10,12 @@ permissions:
   pages: write
   id-token: write
 
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
 jobs:
-  generate-and-deploy:
+  generate:
     runs-on: ubuntu-latest
     steps:
       - name: リポジトリをチェックアウト
@@ -34,22 +37,11 @@ jobs:
         run: pip install -r blog_engine/requirements.txt
 
       - name: 記事を自動生成してサイトをビルド
-        id: generate
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: |
-          python generate_and_build.py
-          echo "generated=true" >> "$GITHUB_OUTPUT"
-        continue-on-error: true
-
-      - name: API制限時はスキップ
-        if: steps.generate.outputs.generated != 'true'
-        run: |
-          echo "::warning::記事生成をスキップしました（APIクォータ制限の可能性）"
-          echo "次回のスケジュール実行で再試行されます"
+        run: python generate_and_build.py
 
       - name: 生成した記事をコミット
-        if: steps.generate.outputs.generated == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -57,10 +49,18 @@ jobs:
           git diff --staged --quiet || git commit -m "記事自動生成: $(date '+%Y-%m-%d %H:%M')"
           git push
 
-      - name: GitHub Pages にデプロイ
-        if: steps.generate.outputs.generated == 'true'
-        uses: peaceiris/actions-gh-pages@v3
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./output/site
-          publish_branch: gh-pages
+          path: ./output/site
+
+  deploy:
+    needs: generate
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
